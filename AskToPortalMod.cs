@@ -1,11 +1,13 @@
 ﻿using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using MelonLoader;
 using Harmony;
-using System.IO;
+using MelonLoader;
+using VRC.Core;
 
-[assembly: MelonInfo(typeof(AskToPortal.AskToPortalMod), "AskToPortal", "1.0.0", "loukylor", "https://github.com/loukylor/AskToPortal")]
+[assembly: MelonInfo(typeof(AskToPortal.AskToPortalMod), "AskToPortal", "2.0.0", "loukylor", "https://github.com/loukylor/AskToPortal")]
 [assembly: MelonGame("VRChat", "VRChat")]
 
 namespace AskToPortal
@@ -13,17 +15,25 @@ namespace AskToPortal
     class AskToPortalMod : MelonMod
     {
         public static bool hasTriggered = false;
+        public static List<string> blacklistedUserIds = new List<string>();
+
+        public static PropertyInfo photonObject;
+
         public static MethodBase popupV1;
         public static MethodBase closePopup;
         public static MethodBase enterPortal;
+
         public override void OnApplicationStart()
         {
+            AskToPortalSettings.RegisterSettings();
             if (MelonHandler.Mods.Where(mod => mod.Info.Name == "Portal Confirmation").Count() > 0)
             {
-                MelonLogger.LogWarning("Use of Portal Confirmation by 404 was detected! AskToPortal is NOT Portal Confirmation. AskToPortal is simply a replacement for Portal Confirmation as 404 was BANNED from the VRChat Modding Group for making malicious mods. If you wish to use this mod please DELETE Portal Confirmation.");
+                MelonLogger.LogWarning("Use of Portal Confirmation by 404 was detected! AskToPortal is NOT Portal Confirmation. AskToPortal is simply a replacement for Portal Confirmation as 404 was BANNED from the VRChat Modding Group. If you wish to use this mod please DELETE Portal Confirmation.");
             }
             else
             {
+                if (photonObject == null) photonObject = typeof(Photon.Pun.PhotonView).GetProperties().Where(propInfo => propInfo.Name.StartsWith("prop_Object")).First(); //Dunno how static the name is so getting it during runtime in
+
                 popupV1 = typeof(VRCUiPopupManager).GetMethods()
                     .Where(mb => mb.Name.StartsWith("Method_Public_Void_String_String_String_Action_String_Action_Action_1_VRCUiPopup_") && !mb.Name.Contains("PDM") && CheckMethod(mb, "UserInterface/MenuContent/Popups/StandardPopupV2")).First();
                 closePopup = typeof(VRCUiPopupManager).GetMethods()
@@ -31,12 +41,15 @@ namespace AskToPortal
                 enterPortal = typeof(PortalInternal).GetMethods()
                     .Where(mb => mb.Name.StartsWith("Method_Public_Void_") && mb.Name.Length <= 21 && CheckUsed(mb, "OnTriggerEnter")).First();
 
-                HarmonyInstance harmonyInstance = HarmonyInstance.Create("AskToPortal Patch");
                 harmonyInstance.Patch(enterPortal, prefix: new HarmonyMethod(typeof(AskToPortalMod).GetMethod("GetConfirmation", BindingFlags.Static | BindingFlags.Public)));
 
                 MelonLogger.Log("Initialized!");
             }
 
+        }
+        public override void OnModSettingsApplied()
+        {
+            AskToPortalSettings.OnModSettingsApplied();
         }
         //This method is practically stolen from https://github.com/BenjaminZehowlt/DynamicBonesSafety/blob/master/DynamicBonesSafetyMod.cs
         public static bool CheckMethod(MethodBase methodBase, string match)
@@ -63,21 +76,56 @@ namespace AskToPortal
         [HarmonyPrefix]
         public static bool GetConfirmation(PortalInternal __instance)
         {
-            if (!hasTriggered)
+            if (!AskToPortalSettings.enabled) return true;
+
+            Photon.Pun.PhotonView photonView = __instance.gameObject.GetComponent<Photon.Pun.PhotonView>();
+            APIUser dropper;
+            if (photonView == null)
             {
-                string dropper;
-                string instanceType;
-                using (StringReader sr = new StringReader(__instance.transform.Find("NameTag").GetComponentInChildren<TMPro.TextMeshPro>().text)) //IDK why but I just cant get String.Split to work
-                {
-                    sr.ReadLine();
-                    dropper = sr.ReadLine();
-                    dropper = dropper == "" ? "Not Player Dropped" : dropper;
-                    instanceType = sr.ReadLine();
-                    instanceType = instanceType == "" ? "Unknown" : instanceType;
-                }
-                popupV1.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, new object[7] { "Notice:",
-                    $"Do you want to enter this portal?{Environment.NewLine}World Name: {__instance.field_Private_ApiWorld_0.name}{Environment.NewLine}Dropper: {dropper}{Environment.NewLine}Instance Type: {instanceType}",
-                    "Yes", (Il2CppSystem.Action) new Action(() => 
+                dropper = new APIUser(displayName: "Not Player Dropped");
+            }
+            else
+            {
+                var photonObjectValue = photonObject.GetValue(photonView); //Some random photon object with player who dropped portal
+                dropper = ((VRC.Player)photonObjectValue.GetType().GetProperty("field_Public_Player_0").GetValue(photonObjectValue, null)).field_Private_APIUser_0;
+            }
+
+            if (blacklistedUserIds.Contains(dropper.id)) return false;
+
+            RoomInfo roomInfo = new RoomInfo();
+            if (__instance.field_Private_String_1 == null)
+            {
+                roomInfo.instanceType = "Unknown";
+            }
+            else
+            {
+                roomInfo = ParseRoomId(__instance.field_Private_String_1);
+            }
+
+            if ((roomInfo.ownerId != "" && roomInfo.ownerId != dropper.id) || __instance.field_Private_ApiWorld_0.id == "wrld_5b89c79e-c340-4510-be1b-476e9fcdedcc") roomInfo.isPortalDropper = true; //If portal dropper is not owner of private instance but still dropped the portal or world id is the public ban world
+
+            if (roomInfo.isPortalDropper)
+            {
+                popupV1.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, new object[7] { "Portal Dropper Detected!!!",
+                        $"This portal was likely dropped by someone malicious! Only go into this portal if you trust {dropper.displayName}. Pressing \"Leave and Blacklist\" will blacklist {dropper.displayName}'s portals until the game restarts",
+                        "Enter", (Il2CppSystem.Action) new Action(() =>
+                        {
+                            closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null);
+                            hasTriggered = true;
+                            try
+                            {
+                                enterPortal.Invoke(__instance, null);
+                            }
+                            catch {}
+                        }), "Leave and Blacklist", (Il2CppSystem.Action) new Action(() => { closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null); blacklistedUserIds.Add(dropper.id); }), null });
+                return false;
+            }
+            else if (!hasTriggered && ShouldCheckUserPortal(dropper))
+            {
+                string dropperName = dropper.id == "" ? "Portal Not Player Dropped" : dropper.displayName;
+                popupV1.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, new object[7] { "Enter This Portal?",
+                    $"Do you want to enter this portal?{Environment.NewLine}World Name: {__instance.field_Private_ApiWorld_0.name}{Environment.NewLine}Dropper: {dropperName}{Environment.NewLine}Instance Type: {roomInfo.instanceType}",
+                    "Yes", (Il2CppSystem.Action) new Action(() =>
                     {
                         closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null);
                         hasTriggered = true;
@@ -94,6 +142,102 @@ namespace AskToPortal
                 hasTriggered = false;
                 return true;
             }
+        }
+        public static RoomInfo ParseRoomId(string roomId)
+        {
+            //Example invite room id: instanceId~private(someones user id here)~nonce(Long hex code here)
+            //Example invite+ room id: instanceId~private(someones user id here)~canRequestInvite~nonce(Long hex code here)
+            //Example friends room id: instanceId~friend(someones user id here)~nonce(Long hex code here)
+            //Example friends+ room id: instanceId~hidden(someones user id here)~nonce(Long hex code here)
+            //Example public room id: instanceId
+            RoomInfo roomInfo = new RoomInfo();
+            
+            IEnumerator splitString = roomId.Split(new char[1] { '~' }).GetEnumerator();
+            splitString.MoveNext();
+            roomInfo.instanceId = (string) splitString.Current;
+            try
+            {
+                int instanceId = int.Parse(roomInfo.instanceId);
+                if (instanceId > 99998 || instanceId < 1) throw new Exception();
+            }
+            catch
+            {
+                roomInfo.isPortalDropper = true;
+                return roomInfo;
+            }
+            if (splitString.MoveNext())
+            {
+                string[] tempString = ((string)splitString.Current).Split(new char[1] { '(' });
+                
+                switch (tempString[0])
+                {
+                    case "private":
+                        roomInfo.instanceType = "Invite Only";
+                        break;
+                    case "friends":
+                        roomInfo.instanceType = "Friends Only";
+                        break;
+                    case "hidden":
+                        roomInfo.instanceType = "Friends+";
+                        break;
+                    default:
+                        roomInfo.isPortalDropper = true;
+                        return roomInfo;
+                }
+                try
+                {
+                    roomInfo.ownerId = tempString[1].TrimEnd(new char[1] { ')' });
+                }
+                catch (IndexOutOfRangeException) 
+                {
+                    roomInfo.isPortalDropper = true;
+                    return roomInfo;
+                }
+
+                if (!splitString.MoveNext())
+                {
+                    roomInfo.isPortalDropper = true;
+                    return roomInfo;
+                }
+                if ((string) splitString.Current == "canRequestInvite")
+                {
+                    roomInfo.instanceType = "Invite+";
+                    splitString.MoveNext();
+                }
+
+                try
+                {
+                    roomInfo.nonce = ((string)splitString.Current).Split(new char[1] { '(' })[1].TrimEnd(new char[1] { ')' });
+                }
+                catch
+                {
+                    roomInfo.isPortalDropper = true;
+                    return roomInfo;
+                }
+            }
+            else
+            {
+                roomInfo.instanceType = "Public";
+            }
+
+            return roomInfo;
+        }
+        public static bool ShouldCheckUserPortal(APIUser dropper)
+        {
+            if ((APIUser.IsFriendsWith(dropper.id) && AskToPortalSettings.autoAcceptFriends) || (dropper.IsSelf && AskToPortalSettings.autoAcceptSelf) || (dropper.id == "" && AskToPortalSettings.autoAcceptWorld))
+            {
+                return false;
+            }
+            return true;
+        }
+
+        public class RoomInfo
+        {
+            public string instanceId = "";
+            public string instanceType = "";
+            public string ownerId = "";
+            public string nonce = "";
+            public bool isPortalDropper = false;
         }
     }
 }
