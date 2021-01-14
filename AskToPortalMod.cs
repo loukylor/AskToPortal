@@ -102,9 +102,10 @@ namespace AskToPortal
                 roomInfo = ParseRoomId(__instance.field_Private_String_1);
             }
 
-            if ((roomInfo.ownerId != "" && roomInfo.ownerId != dropper.id) || __instance.field_Private_ApiWorld_0.id == "wrld_5b89c79e-c340-4510-be1b-476e9fcdedcc") roomInfo.isPortalDropper = true; //If portal dropper is not owner of private instance but still dropped the portal or world id is the public ban world
+            //If portal dropper is not owner of private instance but still dropped the portal or world id is the public ban world or if the population is in the negatives or is above 80
+            if ((roomInfo.ownerId != "" && roomInfo.ownerId != dropper.id) || __instance.field_Private_ApiWorld_0.id == "wrld_5b89c79e-c340-4510-be1b-476e9fcdedcc" || __instance.field_Private_Int32_0 < 0 || __instance.field_Private_Int32_0 > 80) roomInfo.isPortalDropper = true; 
 
-            if (roomInfo.isPortalDropper)
+            if (roomInfo.isPortalDropper && !(AskToPortalSettings.autoAcceptSelf && dropper.id == APIUser.CurrentUser.id))
             {
                 popupV1.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, new object[7] { "Portal Dropper Detected!!!",
                         $"This portal was likely dropped by someone malicious! Only go into this portal if you trust {dropper.displayName}. Pressing \"Leave and Blacklist\" will blacklist {dropper.displayName}'s portals until the game restarts",
