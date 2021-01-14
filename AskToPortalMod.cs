@@ -84,7 +84,7 @@ namespace AskToPortal
             APIUser dropper;
             if (photonView == null)
             {
-                dropper = new APIUser(displayName: "Not Player Dropped");
+                dropper = new APIUser(displayName: "Not Player Dropped", id: "");
             }
             else
             {
