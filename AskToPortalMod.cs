@@ -7,7 +7,7 @@ using Harmony;
 using MelonLoader;
 using VRC.Core;
 
-[assembly: MelonInfo(typeof(AskToPortal.AskToPortalMod), "AskToPortal", "2.0.0", "loukylor", "https://github.com/loukylor/AskToPortal")]
+[assembly: MelonInfo(typeof(AskToPortal.AskToPortalMod), "AskToPortal", "2.0.1", "loukylor", "https://github.com/loukylor/AskToPortal")]
 [assembly: MelonGame("VRChat", "VRChat")]
 
 namespace AskToPortal
