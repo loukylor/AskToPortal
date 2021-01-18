@@ -10,7 +10,9 @@ namespace AskToPortal
         public static bool enabled;
         public static bool autoAcceptFriends;
         public static bool autoAcceptWorld;
+        public static bool autoAcceptHome;
         public static bool autoAcceptSelf;
+        public static bool onlyPortalDrop;
 
         public static void RegisterSettings()
         {
@@ -19,7 +21,9 @@ namespace AskToPortal
             MelonPrefs.RegisterBool(catagory, nameof(enabled), true, "Enable/disable the mod");
             MelonPrefs.RegisterBool(catagory, nameof(autoAcceptFriends), false, "Automatically enter friends portals");
             MelonPrefs.RegisterBool(catagory, nameof(autoAcceptWorld), false, "Automatically enter portals that aren't player dropped");
+            MelonPrefs.RegisterBool(catagory, nameof(autoAcceptHome), false, "Automatically enter home portals");
             MelonPrefs.RegisterBool(catagory, nameof(autoAcceptSelf), true, "Automatically enter your own portals");
+            MelonPrefs.RegisterBool(catagory, nameof(onlyPortalDrop), false, "Only ask if a portal dropper is detected");
 
             OnModSettingsApplied();
         }

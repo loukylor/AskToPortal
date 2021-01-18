@@ -7,7 +7,7 @@ using Harmony;
 using MelonLoader;
 using VRC.Core;
 
-[assembly: MelonInfo(typeof(AskToPortal.AskToPortalMod), "AskToPortal", "2.0.2", "loukylor", "https://github.com/loukylor/AskToPortal")]
+[assembly: MelonInfo(typeof(AskToPortal.AskToPortalMod), "AskToPortal", "2.1.0", "loukylor", "https://github.com/loukylor/AskToPortal")]
 [assembly: MelonGame("VRChat", "VRChat")]
 
 namespace AskToPortal
@@ -18,11 +18,16 @@ namespace AskToPortal
         public static List<string> blacklistedUserIds = new List<string>();
 
         public static PropertyInfo photonObject;
+        public static Type portalInfo; //Dunno if the object name is static so lets just xref 
+        public static Type portalInfoEnum;
+
+        public static Dictionary<int, VRC.Player> cachedDroppers = new Dictionary<int, VRC.Player>();
 
         public static MethodBase popupV2;
         public static MethodBase popupV2Small;
         public static MethodBase closePopup;
         public static MethodBase enterPortal;
+        public static MethodBase enterWorld;
 
         public override void OnApplicationStart()
         {
@@ -33,7 +38,7 @@ namespace AskToPortal
             }
             else
             {
-                if (photonObject == null) photonObject = typeof(Photon.Pun.PhotonView).GetProperties().Where(propInfo => propInfo.Name.StartsWith("prop_Object")).First(); //Dunno how static the name is so getting it during runtime in
+                photonObject = typeof(Photon.Pun.PhotonView).GetProperties().Where(propInfo => propInfo.Name.StartsWith("prop_Object")).First(); //Dunno how static the name is so getting it during runtime in
 
                 popupV2 = typeof(VRCUiPopupManager).GetMethods()
                     .Where(mb => mb.Name.StartsWith("Method_Public_Void_String_String_String_Action_String_Action_Action_1_VRCUiPopup_") && !mb.Name.Contains("PDM") && CheckMethod(mb, "UserInterface/MenuContent/Popups/StandardPopupV2")).First();
@@ -43,8 +48,17 @@ namespace AskToPortal
                     .Where(mb => mb.Name.StartsWith("Method_Public_Void_") && mb.Name.Length <= 21 && !mb.Name.Contains("PDM") && CheckMethod(mb, "POPUP")).First();
                 enterPortal = typeof(PortalInternal).GetMethods()
                     .Where(mb => mb.Name.StartsWith("Method_Public_Void_") && mb.Name.Length <= 21 && CheckUsed(mb, "OnTriggerEnter")).First();
-                harmonyInstance.Patch(enterPortal, prefix: new HarmonyMethod(typeof(AskToPortalMod).GetMethod("GetConfirmation", BindingFlags.Static | BindingFlags.Public)));
 
+                portalInfo = typeof(VRCFlowManager).GetMethods()
+                    .Where(mb => mb.Name.StartsWith("Method_Public_Void_String_ObjectPublic")).First().GetParameters()[1].ParameterType;
+                portalInfoEnum = portalInfo.GetNestedTypes().First();
+                enterWorld = typeof(VRCFlowManager).GetMethods()
+                    .Where(mb => mb.Name.StartsWith($"Method_Public_Void_String_String_{portalInfo.Name}_Action_1_String_Boolean_") && !mb.Name.Contains("PDM") && CheckMethod(mb, "EnterWorld called with an invalid world id.")).First();
+
+                harmonyInstance.Patch(enterPortal, prefix: new HarmonyMethod(typeof(AskToPortalMod).GetMethod("GetConfirmation", BindingFlags.Static | BindingFlags.Public)));
+                harmonyInstance.Patch(typeof(PortalInternal).GetMethod("ConfigurePortal"), prefix: new HarmonyMethod(typeof(AskToPortalMod).GetMethod("OnPortalDropped", BindingFlags.Static | BindingFlags.Public)));
+                harmonyInstance.Patch(typeof(PortalInternal).GetMethod("OnDestroy"), prefix: new HarmonyMethod(typeof(AskToPortalMod).GetMethod("OnPortalDestroyed", BindingFlags.Static | BindingFlags.Public)));
+                    
                 MelonLogger.Log("Initialized!");
             }
 
@@ -52,6 +66,10 @@ namespace AskToPortal
         public override void OnModSettingsApplied()
         {
             AskToPortalSettings.OnModSettingsApplied();
+        }
+        public override void OnLevelWasLoaded(int level)
+        {
+            cachedDroppers.Clear();
         }
         //This method is practically stolen from https://github.com/BenjaminZehowlt/DynamicBonesSafety/blob/master/DynamicBonesSafetyMod.cs
         public static bool CheckMethod(MethodBase methodBase, string match)
@@ -75,85 +93,119 @@ namespace AskToPortal
             return false;
         }
 
+        public static void OnPortalDropped(PortalInternal __instance, string __0, string __1, int __2, VRC.Player __3)
+        {
+            cachedDroppers.Add(__instance.GetInstanceID(), __3);
+        }
+
+        public static void OnPortalDestroyed(PortalInternal __instance)
+        {
+            cachedDroppers.Remove(__instance.GetInstanceID());  
+        }
         [HarmonyPrefix]
         public static bool GetConfirmation(PortalInternal __instance)
         {
             if (!AskToPortalSettings.enabled) return true;
-
-            Photon.Pun.PhotonView photonView = __instance.gameObject.GetComponent<Photon.Pun.PhotonView>();
-            APIUser dropper;
-            if (photonView == null)
-            {
-                dropper = new APIUser(displayName: "Not Player Dropped", id: "");
-            }
-            else
-            {
-                var photonObjectValue = photonObject.GetValue(photonView); //Some random photon object with player who dropped portal
-                dropper = ((VRC.Player)photonObjectValue.GetType().GetProperty("field_Public_Player_0").GetValue(photonObjectValue, null)).field_Private_APIUser_0;
-            }
-
-            if (blacklistedUserIds.Contains(dropper.id)) return false;
-
-            RoomInfo roomInfo = new RoomInfo();
-            if (__instance.field_Private_String_1 == null)
-            {
-                roomInfo.instanceType = "Unknown";
-            }
-            else
-            {
-                roomInfo = ParseRoomId(__instance.field_Private_String_1);
-            }
-
-            //If portal dropper is not owner of private instance but still dropped the portal or world id is the public ban world or if the population is in the negatives or is above 80
-            if ((roomInfo.ownerId != "" && roomInfo.ownerId != dropper.id) || __instance.field_Private_ApiWorld_0.id == "wrld_5b89c79e-c340-4510-be1b-476e9fcdedcc" || __instance.field_Private_Int32_0 < 0 || __instance.field_Private_Int32_0 > 80) roomInfo.isPortalDropper = true;
-
-            if (roomInfo.isPortalDropper && !(AskToPortalSettings.autoAcceptSelf && dropper.id == APIUser.CurrentUser.id) && !hasTriggered)
-            {
-                popupV2.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, new object[7] { "Portal Dropper Detected!!!",
-                    $"This portal was likely dropped by someone malicious! Only go into this portal if you trust {dropper.displayName}. Pressing \"Leave and Blacklist\" will blacklist {dropper.displayName}'s portals until the game restarts",
-                    "Enter", (Il2CppSystem.Action) new Action(() =>
+            if (!hasTriggered)
+            { 
+                Photon.Pun.PhotonView photonView = __instance.gameObject.GetComponent<Photon.Pun.PhotonView>();
+                APIUser dropper;
+                if (photonView == null)
+                {
+                    dropper = new APIUser(displayName: "Not Player Dropped", id: "");
+                }
+                else
+                {
+                    var photonObjectValue = photonObject.GetValue(photonView); //Some random photon object with player who dropped portal
+                    if (photonObjectValue == null)
                     {
-                        closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null);
-                        if (__instance == null)
-                        {
-                            popupV2Small.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, new object[5] {"Notice", "This portal has closed and cannot be entered anymore", "Ok", (Il2CppSystem.Action) new Action(() => closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null)) ,null });
-                            return;
-                        }
-                        hasTriggered = true;
-                        try
-                        {
-                            enterPortal.Invoke(__instance, null);
-                        }
-                        catch {}
-                    }), "Leave and Blacklist", (Il2CppSystem.Action) new Action(() => { closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null); blacklistedUserIds.Add(dropper.id); }), null });
-                return false;
-            }
-            else if (!hasTriggered && ShouldCheckUserPortal(dropper))
-            {
-                popupV2.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, new object[7] { "Enter This Portal?",
-                    $"Do you want to enter this portal?{Environment.NewLine}World Name: {__instance.field_Private_ApiWorld_0.name}{Environment.NewLine}Dropper: {dropper.displayName}{Environment.NewLine}Instance Type: {roomInfo.instanceType}",
-                    "Yes", (Il2CppSystem.Action) new Action(() =>
+                        dropper = cachedDroppers[__instance.GetInstanceID()].field_Private_APIUser_0;
+                    }
+                    else
                     {
-                        closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null);
-                        if (__instance == null)
+                        dropper = ((VRC.Player) photonObjectValue.GetType().GetProperty("field_Public_Player_0").GetValue(photonObjectValue, null)).field_Private_APIUser_0;
+                    }
+                }
+
+                if (blacklistedUserIds.Contains(dropper.id)) return false;
+
+                string roomId = __instance.field_Private_String_1;
+                string worldId = __instance.field_Private_ApiWorld_0.id;
+                int roomPop = __instance.field_Private_Int32_0;
+                RoomInfo roomInfo = new RoomInfo();
+                if (roomId == null)
+                {
+                    if (dropper.id != "") roomInfo.isPortalDropper = true; //If there is a dropper but the portal has no room id
+                    roomInfo.instanceType = "Unknown";
+                }
+                else
+                {
+                    roomInfo = ParseRoomId(roomId);
+                }
+
+                //If portal dropper is not owner of private instance but still dropped the portal or world id is the public ban world or if the population is in the negatives or is above 80
+                if ((roomInfo.ownerId != "" && roomInfo.ownerId != dropper.id && !roomInfo.instanceType.Contains("Friend")) || worldId == "wrld_5b89c79e-c340-4510-be1b-476e9fcdedcc" || roomPop < 0 || roomPop > 80) roomInfo.isPortalDropper = true;
+
+                if (roomInfo.isPortalDropper && !(AskToPortalSettings.autoAcceptSelf && dropper.IsSelf))
+                {
+                    popupV2.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, new object[7] { "Portal Dropper Detected!!!",
+                        $"This portal was likely dropped by someone malicious! Only go into this portal if you trust {dropper.displayName}. Pressing \"Leave and Blacklist\" will blacklist {dropper.displayName}'s portals until the game restarts",
+                        "Enter", (Il2CppSystem.Action) new Action(() =>
                         {
-                            popupV2Small.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, new object[5] {"Notice", "This portal has closed and cannot be entered anymore", "Ok", (Il2CppSystem.Action) new Action(() => closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null)) ,null });
-                            return;
-                        }
-                        hasTriggered = true;
-                        try
+                            closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null);
+
+                            if (__instance == null)
+                            {
+                                object currentPortalInfo = Activator.CreateInstance(portalInfo);
+                                currentPortalInfo.GetType().GetProperty($"field_Public_{portalInfoEnum.Name}_0").SetValue(currentPortalInfo, portalInfoEnum.GetEnumValues().GetValue(3)); //I hate reflection
+                                typeof(Il2CppSystem.Collections.Generic.Dictionary<string, string>).GetMethod("Add").Invoke(currentPortalInfo.GetType().GetProperty("field_Public_Dictionary_2_String_String_0").GetValue(currentPortalInfo), new object[2] { "transitionPortalType", dropper.id == "" ? "Static" : "Dynamic" });
+                                typeof(Il2CppSystem.Collections.Generic.Dictionary<string, string>).GetMethod("Add").Invoke(currentPortalInfo.GetType().GetProperty("field_Public_Dictionary_2_String_String_0").GetValue(currentPortalInfo), new object[2] { "transitionPortalOwner", dropper.id });
+                                enterWorld.Invoke(VRCFlowManager.prop_VRCFlowManager_0, new object[5] { worldId, roomId, currentPortalInfo, (Il2CppSystem.Action<string>) new Action<string>((str) => popupV2Small.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, new object[5] { "Alert", "Cannot Join World", "Close", (Il2CppSystem.Action) new Action(() => closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null)), null })), false }); //Just kill me
+                            }
+                            else
+                            {
+                                hasTriggered = true;
+                                try
+                                {
+                                    enterPortal.Invoke(__instance, null);
+                                }
+                                catch {}
+                            }
+                        }), "Leave and Blacklist", (Il2CppSystem.Action) new Action(() => { closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null); blacklistedUserIds.Add(dropper.id); }), null });
+                    return false;
+                }
+                else if (ShouldCheckUserPortal(dropper) && !(AskToPortalSettings.autoAcceptHome && __instance.field_Internal_Boolean_1) && !AskToPortalSettings.onlyPortalDrop)
+                {
+                    popupV2.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, new object[7] { "Enter This Portal?",
+                        $"Do you want to enter this portal?{Environment.NewLine}World Name: {__instance.field_Private_ApiWorld_0.name}{Environment.NewLine}Dropper: {dropper.displayName}{Environment.NewLine}Instance Type: {roomInfo.instanceType}",
+                        "Yes", (Il2CppSystem.Action) new Action(() =>
                         {
-                            enterPortal.Invoke(__instance, null);
-                        }
-                        catch {}
-                    }), "No", (Il2CppSystem.Action) new Action(() => closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null)), null });
-                return false;
+                            closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null);
+
+                            if (__instance == null)
+                            {
+                                object currentPortalInfo = Activator.CreateInstance(portalInfo);
+                                currentPortalInfo.GetType().GetProperty($"field_Public_{portalInfoEnum.Name}_0").SetValue(currentPortalInfo, portalInfoEnum.GetEnumValues().GetValue(3)); //I hate reflection
+                                typeof(Il2CppSystem.Collections.Generic.Dictionary<string, string>).GetMethod("Add").Invoke(currentPortalInfo.GetType().GetProperty("field_Public_Dictionary_2_String_String_0").GetValue(currentPortalInfo), new object[2] { "transitionPortalType", dropper.id == "" ? "Static" : "Dynamic" });
+                                typeof(Il2CppSystem.Collections.Generic.Dictionary<string, string>).GetMethod("Add").Invoke(currentPortalInfo.GetType().GetProperty("field_Public_Dictionary_2_String_String_0").GetValue(currentPortalInfo), new object[2] { "transitionPortalOwner", dropper.id });
+                                enterWorld.Invoke(VRCFlowManager.prop_VRCFlowManager_0, new object[5] { worldId, roomId, currentPortalInfo, (Il2CppSystem.Action<string>) new Action<string>((str) => popupV2Small.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, new object[5] { "Alert", "Cannot Join World", "Close", (Il2CppSystem.Action) new Action(() => closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null)), null })), false }); //Just kill me
+                            }
+                            else
+                            {
+                                hasTriggered = true;
+                                try
+                                {
+                                    enterPortal.Invoke(__instance, null);
+                                }
+                                catch {}
+                            }
+
+                        }), "No", (Il2CppSystem.Action) new Action(() => closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null)), null });
+                    return false;
+                }
             }
-            else
-            {
-                hasTriggered = false;
-                return true;
-            }
+            hasTriggered = false;
+            return true;
         }
         public static RoomInfo ParseRoomId(string roomId)
         {
@@ -186,7 +238,7 @@ namespace AskToPortal
                     case "private":
                         roomInfo.instanceType = "Invite Only";
                         break;
-                    case "friends":
+                    case "friend":
                         roomInfo.instanceType = "Friends Only";
                         break;
                     case "hidden":
