@@ -9,7 +9,7 @@ using UnityEngine;
 using VRC;
 using VRC.Core;
 
-[assembly: MelonInfo(typeof(AskToPortal.AskToPortalMod), "AskToPortal", "2.1.0", "loukylor", "https://github.com/loukylor/AskToPortal")]
+[assembly: MelonInfo(typeof(AskToPortal.AskToPortalMod), "AskToPortal", "2.1.1", "loukylor", "https://github.com/loukylor/AskToPortal")]
 [assembly: MelonGame("VRChat", "VRChat")]
 
 namespace AskToPortal
