@@ -5,6 +5,8 @@ using System.Linq;
 using System.Reflection;
 using Harmony;
 using MelonLoader;
+using UnityEngine;
+using VRC;
 using VRC.Core;
 
 [assembly: MelonInfo(typeof(AskToPortal.AskToPortalMod), "AskToPortal", "2.1.0", "loukylor", "https://github.com/loukylor/AskToPortal")]
@@ -17,29 +19,32 @@ namespace AskToPortal
         public static bool hasTriggered = false;
         public static List<string> blacklistedUserIds = new List<string>();
 
-        public static PropertyInfo photonObject;
         public static Type portalInfo; //Dunno if the object name is static so lets just xref 
         public static Type portalInfoEnum;
 
-        public static Dictionary<int, VRC.Player> cachedDroppers = new Dictionary<int, VRC.Player>();
+        public static Dictionary<int, Player> cachedDroppers = new Dictionary<int, Player>();
 
         public static MethodBase popupV2;
         public static MethodBase popupV2Small;
+        public static MethodBase closeMenu;
         public static MethodBase closePopup;
         public static MethodBase enterPortal;
         public static MethodBase enterWorld;
-
+        
         public override void OnApplicationStart()
         {
             AskToPortalSettings.RegisterSettings();
-            if (MelonHandler.Mods.Where(mod => mod.Info.Name == "Portal Confirmation").Count() > 0)
+            if (MelonHandler.Mods.Any(mod => mod.Info.Name == "Portal Confirmation"))
             {
-                MelonLogger.LogWarning("Use of Portal Confirmation by 404 was detected! AskToPortal is NOT Portal Confirmation. AskToPortal is simply a replacement for Portal Confirmation as 404 was BANNED from the VRChat Modding Group. If you wish to use this mod please DELETE Portal Confirmation.");
+                MelonLogger.Warning("Use of Portal Confirmation by 404 was detected! AskToPortal is NOT Portal Confirmation. AskToPortal is simply a replacement for Portal Confirmation as 404 was BANNED from the VRChat Modding Group. If you wish to use this mod please DELETE Portal Confirmation.");
             }
             else
             {
-                photonObject = typeof(Photon.Pun.PhotonView).GetProperties().Where(propInfo => propInfo.Name.StartsWith("prop_Object")).First(); //Dunno how static the name is so getting it during runtime in
-
+                portalInfo = typeof(VRCFlowManager).GetMethods()
+                    .Where(mb => mb.Name.StartsWith("Method_Public_Void_String_WorldTransitionInfo_")).First().GetParameters()[1].ParameterType;
+                portalInfoEnum = portalInfo.GetNestedTypes().First();            
+                enterWorld = typeof(VRCFlowManager).GetMethods()
+                    .Where(mb => mb.Name.StartsWith($"Method_Public_Void_String_String_{portalInfo.Name}_Action_1_String_Boolean_") && !mb.Name.Contains("PDM") && CheckMethod(mb, "EnterWorld called with an invalid world id.")).First();
                 popupV2 = typeof(VRCUiPopupManager).GetMethods()
                     .Where(mb => mb.Name.StartsWith("Method_Public_Void_String_String_String_Action_String_Action_Action_1_VRCUiPopup_") && !mb.Name.Contains("PDM") && CheckMethod(mb, "UserInterface/MenuContent/Popups/StandardPopupV2")).First();
                 popupV2Small = typeof(VRCUiPopupManager).GetMethods()
@@ -48,26 +53,22 @@ namespace AskToPortal
                     .Where(mb => mb.Name.StartsWith("Method_Public_Void_") && mb.Name.Length <= 21 && !mb.Name.Contains("PDM") && CheckMethod(mb, "POPUP")).First();
                 enterPortal = typeof(PortalInternal).GetMethods()
                     .Where(mb => mb.Name.StartsWith("Method_Public_Void_") && mb.Name.Length <= 21 && CheckUsed(mb, "OnTriggerEnter")).First();
+                closeMenu = typeof(VRCUiManager).GetMethods()
+                     .Where(mb => mb.Name.StartsWith("Method_Public_Void_Boolean_") && CheckUsed(mb, "ShowAddMessagePopup")).First();
 
-                portalInfo = typeof(VRCFlowManager).GetMethods()
-                    .Where(mb => mb.Name.StartsWith("Method_Public_Void_String_ObjectPublic")).First().GetParameters()[1].ParameterType;
-                portalInfoEnum = portalInfo.GetNestedTypes().First();
-                enterWorld = typeof(VRCFlowManager).GetMethods()
-                    .Where(mb => mb.Name.StartsWith($"Method_Public_Void_String_String_{portalInfo.Name}_Action_1_String_Boolean_") && !mb.Name.Contains("PDM") && CheckMethod(mb, "EnterWorld called with an invalid world id.")).First();
 
-                harmonyInstance.Patch(enterPortal, prefix: new HarmonyMethod(typeof(AskToPortalMod).GetMethod("GetConfirmation", BindingFlags.Static | BindingFlags.Public)));
-                harmonyInstance.Patch(typeof(PortalInternal).GetMethod("ConfigurePortal"), prefix: new HarmonyMethod(typeof(AskToPortalMod).GetMethod("OnPortalDropped", BindingFlags.Static | BindingFlags.Public)));
-                harmonyInstance.Patch(typeof(PortalInternal).GetMethod("OnDestroy"), prefix: new HarmonyMethod(typeof(AskToPortalMod).GetMethod("OnPortalDestroyed", BindingFlags.Static | BindingFlags.Public)));
-                    
-                MelonLogger.Log("Initialized!");
+                Harmony.Patch(enterPortal, prefix: new HarmonyMethod(typeof(AskToPortalMod).GetMethod("OnPortalEnter", BindingFlags.Static | BindingFlags.Public)));
+                Harmony.Patch(typeof(PortalInternal).GetMethod("ConfigurePortal"), prefix: new HarmonyMethod(typeof(AskToPortalMod).GetMethod("OnPortalDropped", BindingFlags.Static | BindingFlags.Public)));
+                Harmony.Patch(typeof(PortalInternal).GetMethod("OnDestroy"), prefix: new HarmonyMethod(typeof(AskToPortalMod).GetMethod("OnPortalDestroyed", BindingFlags.Static | BindingFlags.Public)));
+
+                MelonLogger.Msg("Initialized!");
             }
-
         }
-        public override void OnModSettingsApplied()
+        public override void OnPreferencesSaved()
         {
             AskToPortalSettings.OnModSettingsApplied();
         }
-        public override void OnLevelWasLoaded(int level)
+        public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
             cachedDroppers.Clear();
         }
@@ -93,21 +94,21 @@ namespace AskToPortal
             return false;
         }
 
-        public static void OnPortalDropped(PortalInternal __instance, string __0, string __1, int __2, VRC.Player __3)
+        public static void OnPortalDropped(MonoBehaviour __instance, Player __3)
         {
             cachedDroppers.Add(__instance.GetInstanceID(), __3);
         }
 
-        public static void OnPortalDestroyed(PortalInternal __instance)
+        public static void OnPortalDestroyed(MonoBehaviour __instance)
         {
             cachedDroppers.Remove(__instance.GetInstanceID());  
         }
         [HarmonyPrefix]
-        public static bool GetConfirmation(PortalInternal __instance)
+        public static bool OnPortalEnter(PortalInternal __instance)
         {
             if (!AskToPortalSettings.enabled) return true;
             if (!hasTriggered)
-            { 
+            {
                 Photon.Pun.PhotonView photonView = __instance.gameObject.GetComponent<Photon.Pun.PhotonView>();
                 APIUser dropper;
                 if (photonView == null)
@@ -116,15 +117,7 @@ namespace AskToPortal
                 }
                 else
                 {
-                    var photonObjectValue = photonObject.GetValue(photonView); //Some random photon object with player who dropped portal
-                    if (photonObjectValue == null)
-                    {
-                        dropper = cachedDroppers[__instance.GetInstanceID()].field_Private_APIUser_0;
-                    }
-                    else
-                    {
-                        dropper = ((VRC.Player) photonObjectValue.GetType().GetProperty("field_Public_Player_0").GetValue(photonObjectValue, null)).field_Private_APIUser_0;
-                    }
+                    dropper = cachedDroppers[__instance.GetInstanceID()].field_Private_APIUser_0; // Get cached user because the photon object before gets the owner and can be spoofed
                 }
 
                 if (blacklistedUserIds.Contains(dropper.id)) return false;
@@ -201,6 +194,7 @@ namespace AskToPortal
                             }
 
                         }), "No", (Il2CppSystem.Action) new Action(() => closePopup.Invoke(VRCUiPopupManager.prop_VRCUiPopupManager_0, null)), null });
+
                     return false;
                 }
             }

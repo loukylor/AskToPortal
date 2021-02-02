@@ -16,14 +16,14 @@ namespace AskToPortal
 
         public static void RegisterSettings()
         {
-            MelonPrefs.RegisterCategory(catagory, "AskToPortal Settings");
+            MelonPreferences.CreateCategory(catagory, "AskToPortal Settings");
 
-            MelonPrefs.RegisterBool(catagory, nameof(enabled), true, "Enable/disable the mod");
-            MelonPrefs.RegisterBool(catagory, nameof(autoAcceptFriends), false, "Automatically enter friends portals");
-            MelonPrefs.RegisterBool(catagory, nameof(autoAcceptWorld), false, "Automatically enter portals that aren't player dropped");
-            MelonPrefs.RegisterBool(catagory, nameof(autoAcceptHome), false, "Automatically enter home portals");
-            MelonPrefs.RegisterBool(catagory, nameof(autoAcceptSelf), true, "Automatically enter your own portals");
-            MelonPrefs.RegisterBool(catagory, nameof(onlyPortalDrop), false, "Only ask if a portal dropper is detected");
+            MelonPreferences.CreateEntry(catagory, nameof(enabled), true, "Enable/disable the mod");
+            MelonPreferences.CreateEntry(catagory, nameof(autoAcceptFriends), false, "Automatically enter friends portals");
+            MelonPreferences.CreateEntry(catagory, nameof(autoAcceptWorld), false, "Automatically enter portals that aren't player dropped");
+            MelonPreferences.CreateEntry(catagory, nameof(autoAcceptHome), false, "Automatically enter home portals");
+            MelonPreferences.CreateEntry(catagory, nameof(autoAcceptSelf), true, "Automatically enter your own portals");
+            MelonPreferences.CreateEntry(catagory, nameof(onlyPortalDrop), false, "Only ask if a portal dropper is detected");
 
             OnModSettingsApplied();
         }
@@ -32,7 +32,7 @@ namespace AskToPortal
         {
             foreach (FieldInfo fieldInfo in typeof(AskToPortalSettings).GetFields())
             {
-                fieldInfo.SetValue(null, MelonPrefs.GetBool(catagory, fieldInfo.Name));
+                fieldInfo.SetValue(null, MelonPreferences.GetEntryValue<bool>(catagory, fieldInfo.Name));
             }
         }
     }
