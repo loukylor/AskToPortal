@@ -1,3 +1,7 @@
+# Archive notice
+I've since combined all my mods into one [repository](https://github.com/loukylor/VRC-Mods). This repository only exists so people can still download this mod, and to see version history.
+
+
 This mod also contains many checks for portal droppers, or people who use a mod that drops portals maliciously.
 If the mod detects a portal dropper, it will give you the option of blacklisting the user until you restart your game.
 
